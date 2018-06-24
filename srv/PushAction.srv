@@ -1,0 +1,6 @@
+Pose[2] u
+bool greedy
+bool valid
+bool noop
+---
+bool success
