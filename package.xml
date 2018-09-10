@@ -13,6 +13,8 @@
   <build_depend>eigen</build_depend>
   <build_depend>git</build_depend>
   <build_depend>message_generation</build_depend>
+  <build_depend>eigen_conversions</build_depend>
+  <depend>rospy</depend>
   <depend>cgal</depend>
   <depend>cv_bridge</depend>
   <depend>geometry_msgs</depend>
@@ -22,7 +24,9 @@
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>visualization_msgs</depend>
+  <depend>robot_comm</depend>
   <depend>apriltagscpp</depend>
   <depend>yaml-cpp</depend>
+  <!-- <depend>eigen_conversions</depend> -->
   <exec_depend>message_runtime</exec_depend>
 </package>

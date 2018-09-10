@@ -1,0 +1,51 @@
+#!/usr/bin/env python
+from __future__ import division
+
+import os
+import sys
+from time import time
+
+import click
+import numpy as np
+import numpy.linalg as linalg
+import numpy.random as rand
+import rospy
+import scipy.io as io
+from deep2d_ros.msg import WorldState
+
+import deep2d
+import deep2d_data
+import matplotlib.pyplot as plt
+
+sim = deep2d.PushingSimulator()
+sim.CreateBounds(420,310,20)
+sim.GetOuterBounds().SetPose(np.array([0, -495, 0]))
+sim.GetInnerBounds().SetPose(np.array([0, -495, 0]))
+sim.CreateFencePusher(19.05, 1)
+for i in range(4):
+    for j in range(4):
+        slider = deep2d.CreateBoxSlider(i, 25.4, 25.4)
+        sim.AddSlider(slider)
+x = sim.SamplePoses()
+sim.SetPoses(x)
+# sim.Draw()
+# plt.show()
+
+def worldstate_callback(msg):
+    state = np.array(msg.state)
+    sim.SetSliderPoses(state)
+    sim.Draw()
+    plt.show()
+
+def main():
+    # Get problem generator.
+
+    # Initialize ROS.
+    rospy.init_node('view_worldstate')
+    sub = rospy.Subscriber('/worldstate', WorldState, worldstate_callback)
+
+    rospy.spin()
+
+
+if __name__=='__main__':
+    main()

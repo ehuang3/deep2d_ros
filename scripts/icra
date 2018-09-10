@@ -1,0 +1,307 @@
+#!/usr/bin/env python
+from __future__ import division
+
+import os
+import sys
+import math
+from time import time
+
+import click
+import numpy as np
+import numpy.linalg as linalg
+import numpy.random as rand
+import rospy
+import scipy.io as io
+from deep2d_ros.msg import WorldState
+from robot_comm.msg import robot_CartesianLog
+from std_msgs.msg import Bool
+import robot_comm.srv
+
+import deep2d
+import deep2d_data
+import matplotlib.pyplot as plt
+
+PUSH_HEIGHT = 410.5 # mm
+MOVE_HEIGHT = 440.0 # mm
+
+def get_fresh_state(sim):
+    msg = rospy.wait_for_message('/worldstate', WorldState)
+    msg = rospy.wait_for_message('/worldstate', WorldState)
+    state = np.array(msg.state)
+    sim.SetSliderPoses(state)
+
+def get_contact_flag():
+    msg = rospy.wait_for_message('/linear_potentiometer/contact_flag', Bool)
+    return msg.data
+
+def move_up(robot_get, robot_set):
+    pose = robot_get()
+    pose.z = MOVE_HEIGHT
+    initial_quaternion = [pose.q0, pose.qx, pose.qy, pose.qz]
+    print 'Move up'
+    robot_set(pose.x, pose.y, pose.z, *initial_quaternion)
+
+def move_down(robot_get, robot_set):
+    pose = robot_get()
+    pose.z = PUSH_HEIGHT
+    initial_quaternion = [pose.q0, pose.qx, pose.qy, pose.qz]
+    print 'Move down'
+    robot_set(pose.x, pose.y, pose.z, *initial_quaternion)
+
+def move_pre(action, robot_get, robot_set, robot_get_joints, robot_set_joints):
+    move_up(robot_get, robot_set)
+
+    pose = robot_get()
+    pose.x = action.u[0,0]
+    pose.y = action.u[1,0]
+    pose.z = MOVE_HEIGHT
+
+    pose.z = MOVE_HEIGHT
+    initial_quaternion = [pose.q0, pose.qx, pose.qy, pose.qz]
+    print 'Move pre'
+    robot_set(pose.x, pose.y, pose.z, *initial_quaternion)
+
+    theta = np.unwrap(action.u)[2,0]
+    # print "raw theta", theta
+    while theta > np.pi/2:
+        theta -= np.pi
+    while theta < -np.pi/2:
+        theta += np.pi
+    # print "wrapped theta", theta
+    theta *= 180.0/np.pi
+    # print "to degrees", theta
+
+    joints = robot_get_joints()
+    joints.j6 = 90 + (joints.j1 + 90) + theta
+    # print joints
+    robot_set_joints(joints.j1, joints.j2, joints.j3, joints.j4, joints.j5, joints.j6)
+
+def move_post(action, robot_get, robot_set):
+    move_down(robot_get, robot_set)
+
+    for i in range(3):
+        if get_contact_flag():
+    # if True:
+            print "Contact!"
+            move_up(robot_get, robot_set)
+            pose = robot_get()
+            # print 'u', action.u
+            v = action.u[:,1] - action.u[:,0]
+            # print 'v', v
+            v = v[0:2]
+            v = v / np.linalg.norm(v)
+            # print 'v', v
+            pose.x = action.u[0,0] - 3 * v[0]
+            pose.y = action.u[1,0] - 3 * v[1]
+            pose.z = PUSH_HEIGHT
+            initial_quaternion = [pose.q0, pose.qx, pose.qy, pose.qz]
+            print 'Move away'
+            robot_set(pose.x, pose.y, pose.z, *initial_quaternion)
+
+            move_down(robot_get, robot_set)
+
+    if get_contact_flag():
+        return
+
+    pose = robot_get()
+    pose.x = action.u[0,1]
+    pose.y = action.u[1,1]
+    pose.z = PUSH_HEIGHT
+    initial_quaternion = [pose.q0, pose.qx, pose.qy, pose.qz]
+
+    print 'Move post'
+    robot_set(pose.x, pose.y, pose.z, *initial_quaternion)
+
+    move_up(robot_get, robot_set)
+
+def main():
+    # Create sorting problem.
+    sim = deep2d.PushingSimulator()
+    yr = 310
+    xr = 420
+    margin = 10
+    sim.CreateBounds(xr,yr,margin)
+    x0 = 0
+    y0 = -495
+    z0 = MOVE_HEIGHT
+    sim.GetOuterBounds().SetPose(np.array([0, y0, 0]))
+    sim.GetInnerBounds().SetPose(np.array([0, y0, 0]))
+    sim.CreateFencePusher(19.05, 1)
+    sim.SetMaxVelocity(12)
+    sim.SetMinSteeringDistance(2.5)
+
+    # Calc.
+    eps = 3
+    dy = (yr-2*margin)/4.
+    dx = (xr-2*margin)/4.
+    w = np.array([1.,1.,31.75])
+
+    # Create sliders.
+    red = 0
+    blue = 9
+    yellow = 0
+    green = 0
+    for i in range(red):
+        slider = deep2d.CreateBoxSlider(0,25.4,25.4)
+        slider.SetFixedGoal(False)
+        slider.SetWeights(w)
+        slider.SetGoalEpsilon(eps)
+        sim.AddSlider(slider)
+        slider.SetPose(np.array([-dx,y0+dy,0.]))
+    for i in range(blue):
+        slider = deep2d.CreateBoxSlider(1,25.4,25.4)
+        slider.SetFixedGoal(False)
+        slider.SetWeights(w)
+        slider.SetGoalEpsilon(eps)
+        sim.AddSlider(slider)
+        slider.SetPose(np.array([dx,y0-dy,0.]))
+    for i in range(yellow):
+        slider = deep2d.CreateBoxSlider(2,25.4,25.4)
+        slider.SetFixedGoal(False)
+        slider.SetWeights(w)
+        slider.SetGoalEpsilon(eps)
+        sim.AddSlider(slider)
+        slider.SetPose(np.array([dx,y0+dy,0.]))
+    for i in range(green):
+        slider = deep2d.CreateBoxSlider(3,25.4,25.4)
+        slider.SetFixedGoal(False)
+        slider.SetWeights(w)
+        slider.SetGoalEpsilon(eps)
+        sim.AddSlider(slider)
+        slider.SetPose(np.array([-dx,y0-dy,0.]))
+
+    # Set goal poses.
+    poses = deep2d.Font.GetCharacterPoses('I',length=25.4,zero=np.array([-100,y0+60]))
+    sim.SetSliderPoses(1, poses)
+    
+    target = sim.GetSliderPoses()
+    sim.AssignGoals(target)
+    # sim.Draw()
+    # plt.show()
+
+    # Create action sampler.
+    actionSpace = deep2d.BlockRearrangingActionSpace()
+    actionSpace.SetGreedyChance(0.99)
+    actionSpace.SetMaxPushingDistance(100)
+    actionSpace.SetRandomPushingDistance(50)
+    actionSpace.GetActionSampler().SetMaxBackup(50)
+    actionSpace.GetActionSampler().SetBackupStep(2.5)
+    actionSpace.GetResetSampler().SetMaxBackup(50)
+    actionSpace.GetResetSampler().SetBackupStep(2.5)
+    actionSpace.GetResetSampler().SetMaxPushingDistance(25)
+    actionSpace.GetResetSampler().SetRandomPushingDistance(25)
+    actionSpace.SetPushingSimulator(sim)
+
+    sim.SetPoses(sim.SamplePoses())
+
+    # Initialize ROS.
+    rospy.init_node('sort')
+
+    # Get state.
+
+    # action = actionSpace.SamplePushingAction(target)
+    # T = sim.Steer(action, target)
+    # print T.shape
+    # plt.hold('on')
+    # for i in range(T.shape[1]):
+    #     sim.SetPoses(T[:,i])
+    #     sim.Draw()
+    # plt.show()
+
+    # Initialize the robot.
+    robot_ns = 'abb140'
+    rospy.wait_for_service(robot_ns + '/robot_SetWorkObject')
+    robot_SetWorkObject = rospy.ServiceProxy(robot_ns + '/robot_SetWorkObject', robot_comm.srv.robot_SetWorkObject)
+    robot_SetTool = rospy.ServiceProxy(robot_ns + '/robot_SetTool', robot_comm.srv.robot_SetTool)
+    robot_SetZone = rospy.ServiceProxy(robot_ns + '/robot_SetZone', robot_comm.srv.robot_SetZone)
+    robot_SetSpeed = rospy.ServiceProxy(robot_ns + '/robot_SetSpeed', robot_comm.srv.robot_SetSpeed)
+    robot_SetCartesian = rospy.ServiceProxy(robot_ns + '/robot_SetCartesian', robot_comm.srv.robot_SetCartesian)
+    robot_GetCartesian = rospy.ServiceProxy(robot_ns + '/robot_GetCartesian', robot_comm.srv.robot_GetCartesian)
+    robot_GetIK = rospy.ServiceProxy(robot_ns + '/robot_GetIK', robot_comm.srv.robot_GetIK)
+    robot_SetJoints = rospy.ServiceProxy(robot_ns + '/robot_SetJoints', robot_comm.srv.robot_SetJoints)
+    robot_GetJoints = rospy.ServiceProxy(robot_ns + '/robot_GetJoints', robot_comm.srv.robot_GetJoints)
+
+    robot_SetWorkObject(0,0,0,1,0,0,0)
+    robot_SetTool(0,0,0,0,0,1,0)
+    robot_SetZone(0)
+    robot_SetSpeed(150,150)
+
+    # Read in state.
+    pose = robot_GetCartesian()
+    pose.x = x0
+    pose.y = y0
+    pose.z = MOVE_HEIGHT
+
+    # Reset
+    robot_SetJoints(-90, 0, 0, 0, 90, 90)
+
+    # Go down
+    # move_up(robot_GetCartesian, robot_SetCartesian)
+    # move_down(robot_GetCartesian, robot_SetCartesian)
+    # move_up(robot_GetCartesian, robot_SetCartesian)
+
+    print 'here'
+
+    get_fresh_state(sim)
+    sim.Draw()
+    plt.show()
+
+    while True:
+        get_fresh_state(sim)
+        print 'Fresh state'
+
+        # get_fresh_state(sim)
+        # sim.GetHand().SetPose(action.u[:,1])
+
+        if sim.AllAtGoal(target):
+            break
+
+        while True:
+            action = actionSpace.SamplePushingAction(target)
+            if not action.valid:
+                print 'invalid action'
+                sim.GetHand().SetPose(action.u[:,0])
+                sim.Draw()
+                sim.GetHand().SetPose(action.u[:,1])
+                sim.Draw()
+                plt.show()
+                continue
+            T = sim.Steer(action, target)
+            if not action.noop:
+                break
+            print 'noop action', action.greedy
+            print 'reset', action.reset
+            # sim.GetHand().SetPose(action.u[:,0])
+            # sim.Draw()
+            # sim.GetHand().SetPose(action.u[:,1])
+            # sim.Draw()
+            # plt.show()
+
+        print 'action.u', action.u
+        print 'action.greedy', action.greedy
+
+        move_pre(action, robot_GetCartesian, robot_SetCartesian, robot_GetJoints, robot_SetJoints)
+
+        # move_down(robot_GetCartesian, robot_SetCartesian)
+
+
+
+        # move_up(robot_GetCartesian, robot_SetCartesian)
+
+        move_post(action, robot_GetCartesian, robot_SetCartesian)
+
+        get_fresh_state(sim)
+        sim.GetHand().SetPose(action.u[:,1])
+        sim.Draw()
+        plt.show()
+
+    print 'Solved'
+
+    robot_SetJoints(-90, 0, 0, 0, 90, 90)
+    robot_SetJoints(-45, 0, 0, 0, 90, 90)
+
+    rospy.spin()
+
+
+if __name__=='__main__':
+    main()
